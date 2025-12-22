@@ -31,6 +31,7 @@ height = 6 # inches
 autosome_only = opt$autosome
 
 counts_df = read_delim(counts_path, delim='\t', col_types = cols(chrom=col_character()))
+print(dim(counts_df))
 reference_fai = read_delim(fai_path, delim='\t', col_names = c('name', 'length', 'offset', 'linebases', 'linewidth', 'qualoffset'))
 reference_fai = reference_fai %>% mutate(cumpos = cumsum(length), lag1=lag(cumpos), lag1=replace_na(lag1, 0))
 

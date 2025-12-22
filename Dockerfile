@@ -1,46 +1,57 @@
-FROM ubuntu:focal
-ENV DEBIAN_FRONTEND noninteractive
-# Upgrade installed packages
-RUN apt-get update && apt-get install -y -f autoconf automake make gcc perl zlib1g-dev libbz2-dev liblzma-dev libcurl4-gnutls-dev libssl-dev libncurses5-dev bwa bedtools build-essential python3.8 python3.8-venv python3-pip python3.8-dev git wget vim less software-properties-common python-is-python3 openjdk-8-jdk locales locales-all curl
+FROM elle72/tmp:vs2
 
-ENV R_HOME=/usr/local/lib/R
-RUN apt-key adv --keyserver keyserver.ubuntu.com --recv-keys E298A3A825C0D65DFD57CBB651716619E084DAB9 && \
-    add-apt-repository 'deb https://cloud.r-project.org/bin/linux/ubuntu focal-cran40/' && \
-    apt update && apt install -y r-base-dev libxml2 libxml2-dev
-RUN echo "TZ=$( cat /etc/timezone )" >> /etc/R/Renviron.site
+WORKDIR /root
 
-# Install R packages
-RUN R -e "install.packages('BiocManager', dependencies=TRUE, repos='http://cran.rstudio.com/')"
-RUN R -e "BiocManager::install('DNAcopy')"
-RUN R -e "BiocManager::install('aroma.light')"
-RUN R -e "install.packages('PSCBS', dependencies=TRUE, repos='http://cran.rstudio.com/')"
-RUN R -e "install.packages('tidyverse', dependencies=TRUE)"
-RUN R -e "install.packages('optparse', dependencies=TRUE, repos='http://cran.rstudio.com/')"
-RUN R -e "install.packages('bbmle', dependencies=TRUE, repos='http://cran.rstudio.com/')"
+RUN R -e "install.packages('BiocManager')" \
+    && R -e "BiocManager::install(c('DSS', 'BSSEQ'))"
 
-# Install Htslib
-RUN mkdir tools && cd tools && wget https://github.com/samtools/htslib/releases/download/1.11/htslib-1.11.tar.bz2 && \
-    tar xvfj htslib-1.11.tar.bz2 && \
-    cd htslib-1.11 &&  ./configure && make && make install && cd $HOME 
+RUN apt-get update && apt-get install -y \
+    libfreetype6-dev \
+    libharfbuzz-dev \
+    libfribidi-dev \
+    libpng-dev \
+    libtiff5-dev \
+    libjpeg-dev \
+    pkg-config \
+    libfontconfig1-dev \
+    && R -e "install.packages('tidyverse')"
 
-# Install samtools
-RUN cd tools && wget https://github.com/samtools/samtools/releases/download/1.9/samtools-1.9.tar.bz2 && \
-    tar xvfj samtools-1.9.tar.bz2 && \
-    cd samtools-1.9 &&  ./configure && make && make install && cp samtools /usr/local/bin/ && cd $HOME
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    wget \
+    curl \
+    git \
+    bc \
+    zlib1g-dev \
+    libncurses5-dev \
+    libbz2-dev \
+    liblzma-dev \
+    libcurl4-openssl-dev \
+    python3 \
+    python3-pip \
+    && apt-get clean
 
-# Install python3 packages
-RUN pip3 install pysam snakemake numpy pandas scipy 
-
-ENV PATH="/usr/local/bin/:${PATH}"
-
-# Clean up
-RUN cd tools && rm -f *.tar.bz2 && rm -f *.tar.gz && cd $HOME 
-
-# Download triomix
-ARG VERSION
-ENV VERSION='v0.0.1'
-RUN cd tools && wget https://github.com/cjyoon/triomix/archive/refs/tags/${VERSION}.tar.gz && \
-    mkdir -p triomix && \
-    tar zxvf ${VERSION}.tar.gz  -C triomix --strip-components 1
+RUN apt-get update && apt-get install -y \
+    bedtools \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
 
 
+RUN wget https://github.com/samtools/samtools/releases/download/1.15.1/samtools-1.15.1.tar.bz2 \
+    && tar -xjf samtools-1.15.1.tar.bz2 \
+    && cd samtools-1.15.1 \
+    && make \
+    && make install \
+    && cd .. \
+    && rm -rf samtools-1.15.1 samtools-1.15.1.tar.bz2
+
+
+RUN git clone --recurse-submodules https://github.com/samtools/htslib.git && \
+    cd htslib && \
+    make && \
+    make install
+
+
+
+
+RUN rm -rf /var/lib/apt/lists/* htslib

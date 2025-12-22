@@ -30,6 +30,8 @@ def argument_parser():
     parser.add_argument('--runmode', required=False, default='all', choices=['single', 'joint', 'all'], help="Runmode for mle.R script. 'single' assumes only 1 contamination source within family. 'joint' calculates the fraction of all family members jointly. 'all' runs both modes. Default=all")
     parser.add_argument("-u", '--upd', default=1, choices=[0, 1], help="0: mle will filter out vaf=0 or 1 in sites where parental genotypes are homo-ref + homo-alt (GroupA SNPs) 1: mle will identify UPDs which appears as contamination. Default=1")
     parser.add_argument('--parent', required=False, action='store_true', help="Run detection of parental DNA contamination with child's DNA")
+    parser.add_argument('--updMode', required=False, action='store_true', help="Run UPD detection")
+    parser.add_argument('--dmrMode', required=False, action='store_true', help="Run DMR analysis (only can do in UPD Mode)")
     parser.add_argument('-d', '--downsample', required=False, default=0.1, type=float, help="Downsampling for plotting.")
 
     args = vars(parser.parse_args())
@@ -38,7 +40,7 @@ def argument_parser():
         args['prefix'] = sampleNameBam(args['child'])
 
 
-    return args['father'], args['mother'], args['child'], args['reference'], args['snp'], args['thread'], args['output_dir'], args['prefix'], args['runmode'], args['upd'], args['parent'], args['downsample']
+    return args['father'], args['mother'], args['child'], args['reference'], args['snp'], args['thread'], args['output_dir'], args['prefix'], args['runmode'], args['upd'], args['parent'], args['updMode'], args['dmrMode'], args['downsample']
 
 
 def sampleNameBam(bamFile):
@@ -88,12 +90,14 @@ def split_regions(fasta_file, segment_length):
 
 def check_gzip_file(file_path):
     """checks if the file is binary or not"""
-    cmd = f'file {file_path}'
-    execute = subprocess.check_output(shlex.split(cmd)).decode()
-    if re.search(r'gzip compressed|gzip compatible', execute):
-        return True
-    else:
-        return False
+    return file_path.endswith(".gz")
+    #cmd = f'file {file_path}'
+    #print(cmd)
+    #execute = subprocess.check_output(shlex.split(cmd)).decode()
+    #if re.search(r'gzip compressed|gzip compatible', execute):
+    #    return True
+    #else:
+    #    return False
 
 
 def check_region_and_snp_bed(region, snp_bed):
@@ -407,7 +411,7 @@ def run_plot_parent_rscript(count_table, output_dir, reference, downsample=0.1):
     return 0 
 
 
-def run_segmentation(count_table, output_dir, segment_length):
+def run_segmentation(SEGMENTATION_RSCRIPT, count_table, output_dir, segment_length):
     """run segmentation on homo-ref + homo-alt sites for each parental SNPs"""
     cmd = f'{RSCRIPT} {SEGMENTATION_RSCRIPT} -i {count_table} -o {output_dir} -s {segment_length}'
     print(cmd)
@@ -415,7 +419,6 @@ def run_segmentation(count_table, output_dir, segment_length):
     execute.wait()
 
     return 0 
-
 
 
 def get_paths(path_config):
@@ -491,18 +494,127 @@ def combine_count_files(file_list, output_file):
                     f.write(line)
     return output_file
 
+def run_DeepVar(bam, chrom, OUTDIR, name):
+    REFERENCE="/storage1/fs1/jin810/Active/testing/Nahyun/UPD_PROJECT/reference/hs38DH.fa"
+    cmd = f"/opt/deepvariant/bin/run_deepvariant --model_type=PACBIO --ref={REFERENCE}  --reads={bam} --regions {chrom} --output_vcf={OUTDIR}/{name}/deepvar_{name}.{chrom}.vcf.gz --num_shards=16"
+    print(cmd)
+    os.system(cmd)
+    return(f"{OUTDIR}/{name}/deepvar_{name}.{chrom}.vcf.gz")
+
+def run_Hiphase(bam, vcf, outdir, name):
+    REFERENCE="/storage1/fs1/jin810/Active/testing/Nahyun/UPD_PROJECT/reference/hs38DH.fa"
+    cmd = f"hiphase --bam {bam} --output-bam {outdir}/{name}/hiphase_{name}.bam --vcf {vcf} --output-vcf {outdir}/{name}/hiphase_{name}.vcf.gz --reference {REFERENCE} --threads 32 --ignore-read-groups"
+    print(cmd)
+    os.system(cmd)
+    return(f"{outdir}/{name}/hiphase_{name}.bam")
+
+def run_aligned_bam_to_cpg_scores(bam, outdir, name):
+    cmd = f"aligned_bam_to_cpg_scores --bam {bam} --output-prefix {outdir}/{name}/methylation_{name} --model /opt/pb-CpG-tools-v2.3.2-x86_64-unknown-linux-gnu/models/pileup_calling_model.v1.tflite --threads 16"
+    print(cmd)
+    os.system(cmd)
+
+def run_Methylation(output_dir, bam, UPDbed, name, thread):
+
+    os.system(f'mkdir -p {output_dir}/{name}')
+
+    ##Step 0: Filter bad reads from bamfile
+    print(f"{name}: filter Bam")
+    filtered=f"{output_dir}/{name}/{os.path.basename(bam).replace('.bam', '.filtered.bam')}"
+    cmd = f"samtools view -b -q 6 {bam} | samtools sort -o {filtered}"
+    cmd2 =  f"samtools index {filtered}"
+    os.system(cmd)
+    os.system(cmd2)
+
+    ##Step 1: get chromsomes that have UPD
+    print(f"{name}: setting up run")
+
+    chromosomes = set()
+    with open(UPDbed, 'r') as bed_file:
+        next(bed_file)
+        for line in bed_file:
+            if line.startswith('#') or not line.strip():
+                continue  # Skip headers or empty lines
+            fields = line.strip().split('\t')
+            if len(fields) > 0:
+                chromosomes.add(fields[0])
+
+    #Step 2: Run deepvar for each chromosome
+    print(f"{name}: running deepvar")
+
+    deepVarArgs=[]
+    for chrom in sorted(chromosomes):
+        deepVarArgs.append([filtered, chrom, output_dir, name])
+    
+    with mp.Pool(thread) as pool:
+        deepvar_vcfs = pool.starmap(run_DeepVar, deepVarArgs) 
+
+
+    #step 3: merge deepvar for each chromosome run
+    mergedVCF = f"{output_dir}/{name}/deepvar_{name}.merged.vcf"
+
+    with pysam.VariantFile(deepvar_vcfs[0]) as first_vcf:
+        with pysam.VariantFile(mergedVCF, 'w', header=first_vcf.header) as out_vcf:
+            # Write records from the first VCF
+            for record in first_vcf:
+                out_vcf.write(record)
+
+            # Process the rest
+            for vcf_path in deepvar_vcfs[1:]:
+                with pysam.VariantFile(vcf_path) as vcf:
+                    for record in vcf:
+                        out_vcf.write(record)
+    cmdGzip = f"bgzip {mergedVCF}"
+    cmdTabix = f"tabix {mergedVCF}.gz"
+    os.system(cmdGzip)
+    os.system(cmdTabix)
+
+    #step 4: Run hiphase
+    print(f"{name}: running hiphase")
+    phasebam = run_Hiphase(filtered, f"{mergedVCF}.gz", output_dir, name)
+
+    os.system(f'cd {output_dir}/{name}')
+
+    #Step5: run methylation
+    print(f"{name}: running methylation")
+    run_aligned_bam_to_cpg_scores(phasebam, output_dir, name)
+
+
+def DMR(outdir, fatherBam, motherBam, childBam, updRegions, threads, script_dir):
+    os.system(f'mkdir -p {outdir}')
+    MethylationArgs=[]
+    MethylationArgs.append((f"{outdir}", fatherBam, updRegions, "father", threads))
+    MethylationArgs.append((f"{outdir}", motherBam, updRegions, "mother", threads))
+    MethylationArgs.append((f"{outdir}", childBam, updRegions, "child", threads))
+
+    processes = []
+    for run in MethylationArgs:
+        p = mp.Process(target=run_Methylation, args=run)
+        p.start()
+        processes.append(p)
+
+    for p in processes:
+        p.join()
+
+    cmd = f'bash {DMR_SCRIPT} -u {updRegions} -f {outdir}/father/methylation_father.hap1.bed -g {outdir}/father/methylation_father.hap2.bed -m {outdir}/mother/methylation_mother.hap1.bed -n {outdir}/mother/methylation_mother.hap2.bed -c {outdir}/child/methylation_child.combined.bed -o {outdir}/dmr -t 0.3 -z {script_dir}'
+    os.system(cmd)
+
 def main():
-    global SAMTOOLS, REFERENCE, RSCRIPT, MLE_RSCRIPT, GZIP, PLOT_RSCRIPT, SEGMENTATION_RSCRIPT, MLE_PARENT_RSCRIPT, MLE_PARENT_CHILD_HOMOALT_RSCRIPT, PLOT_RSCRIPT_PARENT, VBID
+    global SAMTOOLS, REFERENCE, RSCRIPT, MLE_RSCRIPT, GZIP, PLOT_RSCRIPT, SEGMENTATION_RSCRIPT, MLE_PARENT_RSCRIPT, MLE_PARENT_CHILD_HOMOALT_RSCRIPT, DMR_SCRIPT, PLOT_RSCRIPT_PARENT, VBID
 
 
-    father_bam, mother_bam, child_bam, REFERENCE, snp_bed, thread, output_dir, prefix, runmode, upd, parent, downsample, *args  = argument_parser()
+    father_bam, mother_bam, child_bam, REFERENCE, snp_bed, thread, output_dir, prefix, runmode, upd, parent, UPDMode, DMRmode, downsample, *args  = argument_parser()
     output_dir = os.path.abspath(output_dir)
+
+    if DMRmode and not UPDMode:
+        print("can only run DMR mode if in UPD mode")
+        return 19
 
     # configure paths to executables 
     script_dir = os.path.dirname(os.path.realpath(__file__)) 
     path_config = os.path.join(script_dir, 'path_config.json')
 
     SAMTOOLS, RSCRIPT, GZIP = get_paths(path_config)
+    print(f'RSCRIPT: {RSCRIPT}')
 
     # path to the MLE Rscript 
     MLE_RSCRIPT = os.path.join(script_dir, 'mle.R')
@@ -518,8 +630,10 @@ def main():
     PLOT_RSCRIPT_PARENT = os.path.join(script_dir, 'plot_variant_parent.R')
 
     # path to segmentation Rscript
-    SEGMENTATION_RSCRIPT = os.path.join(script_dir, 'upd_segmentation.R')
+    SEGMENTATION_RSCRIPT1 = os.path.join(script_dir, 'upd_segmentation.R')
+    SEGMENTATION_RSCRIPT2 = os.path.join(script_dir, 'upd_segmentation_2_R.r')
 
+    DMR_SCRIPT =  os.path.join(script_dir, 'DMRs.sh')
 
     # split up regions
     segment_length = 50000000
@@ -559,10 +673,6 @@ def main():
     with mp.Pool(thread) as pool:
         counts_split_files = pool.starmap(get_child_count, arg_list)
 
-
-    # print(counts_split_files)
-
-
     # combine counts files
 
     combined_counts = os.path.join(output_dir, f'{prefix}.child.counts')
@@ -571,24 +681,34 @@ def main():
     # combine the count files for each split mpileup
     combine_count_files(counts_split_files, combined_counts)
 
-    # maximum likelihood estimate
-    print('running MLE')
-    run_mle_rscript(combined_counts, output_dir, runmode, upd)
-
     # plot variants
     print('plotting variants')
     run_plot_rscript(combined_counts, output_dir, REFERENCE, downsample=downsample)
 
-    # upd segmentation
-    print('upd segmentation')
-    upd_segment_length = 1000000 # 1mb
-    run_segmentation(combined_counts, output_dir, segment_length=upd_segment_length)
+
+    print(f'UPD mode {UPDMode}')
+    if UPDMode:
+        print('upd segmentation')
+        upd_segment_length = 1000000 # 1mb
+        run_segmentation(SEGMENTATION_RSCRIPT2, combined_counts, output_dir, segment_length=upd_segment_length)
+        UPDRegions=os.path.join(output_dir, os.path.basename(combined_counts) + ".upd.classification.bed")
+        DMR(f"{output_dir}/DMR", father_bam, mother_bam, child_bam, UPDRegions, 32, script_dir)
 
 
-    # get the chrX to autosome depth ratio. 
-    child_x_ratio, father_x_ratio, mother_x_ratio = sexchrom_ratio(combined_counts)
-    with open(os.path.join(output_dir, prefix + '.x2a.depth.tsv'), 'w') as f:
-        f.write(f'child\t{child_x_ratio:.3f}\nfather\t{father_x_ratio:.3f}\nmother\t{mother_x_ratio:.3f}')
+
+    else:
+        print('running MLE')
+        run_mle_rscript(combined_counts, output_dir, runmode, upd)
+
+        # upd segmentation
+        print('upd segmentation')
+        upd_segment_length = 1000000 # 1mb
+        run_segmentation(SEGMENTATION_RSCRIPT1, combined_counts, output_dir, upd_segment_length)
+
+        # get the chrX to autosome depth ratio. 
+        child_x_ratio, father_x_ratio, mother_x_ratio = sexchrom_ratio(combined_counts)
+        with open(os.path.join(output_dir, prefix + '.x2a.depth.tsv'), 'w') as f:
+            f.write(f'child\t{child_x_ratio:.3f}\nfather\t{father_x_ratio:.3f}\nmother\t{mother_x_ratio:.3f}')
 
 
     # run parent DNA contamination if --parent is set
@@ -604,8 +724,6 @@ def main():
         run_mle_parent_child_homoalt_rscript(parent_counts, output_dir)
         print('plotting parent variants')
         run_plot_parent_rscript(parent_counts, output_dir, REFERENCE, downsample=downsample)
-
-
 
 
     print('done')
