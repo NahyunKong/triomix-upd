@@ -1,6 +1,6 @@
 # TrioMix-upd
 TrioMix-upd is a specialized version of [TrioMix](https://github.com/cjyoon/triomix), designed to detect uniparental disomy (UPD) from trio-based genomic sequencing data.  
-It supports whole-exome sequencing (WES), whole-genome sequencing (WGS), and long-read sequencing (e.g., PacBio).
+It enable upd detections from whole-exome sequencing (WES), whole-genome sequencing (WGS), and long-read sequencing data (e.g., PacBio).
 
 For details, please visit:  
 https://triomix.readthedocs.io/en/latest/
