@@ -46,10 +46,19 @@ git clone https://github.com/NahyunKong/triomix_upd.git
 
 ### Quick Start
 Here's a basic command:
+#### When running with trio BAM/CRAM
 
 ```bash
 python3.10 triomix.py -f <father.bam> -m <mother.bam> -c <child.bam> -o <out_direcotry> -t 16 -r <reference.fa> -s <common_snps.bed.gz> --updMode
 ```
+
+#### When running with trio joint VCF
+```bash
+python3.10 triomix.py --joint_vcf <trio.joint.vcf.gz> --father_sample <father_sample_id> --mother_sample <mother_sample_id> --child_sample  <child_sample_id> -o <out_directory> -t 16  -r <reference.fa> -s <common_snps.bed.gz> --updMode
+```
+- `--joint_vcf`: A bgzipped, indexed (.tbi or .csi) multi-sample VCF that contains the trio (father, mother, child) in the same VCF. The VCF must contain genotype information (GT) and read depth fields required to compute allele counts(DP, AD).
+- `--father_sample`, `--mother_sample`, `--child_sample`: The exact sample IDs as they appear in the VCF header.
+
 
 ## Output
 - `*.child.counts`  
