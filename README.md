@@ -5,7 +5,7 @@ It supports whole-exome sequencing (WES), whole-genome sequencing (WGS), and lon
 For details, please visit:  
 https://triomix.readthedocs.io/en/latest/
 
-![TrioMix-upd workflow](images/triomix_workflow.png)
+
 
 
 ## Workflow
